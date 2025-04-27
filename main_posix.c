@@ -21,6 +21,20 @@ typedef ptrdiff_t  iz;
 #include <sys/stat.h>
 #include <unistd.h>
 
+function Arena
+os_arena_new(iz size)
+{
+	Arena result = {0};
+	iz page_size = sysconf(_SC_PAGESIZE);
+	if (size % page_size) size += page_size - (size % page_size);
+	u8 *mem = mmap(0, size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
+	if (mem != MAP_FAILED) {
+		result.beg = mem;
+		result.end = mem + size;
+	}
+	return result;
+}
+
 function str8
 os_map_file(u8 *name)
 {
@@ -39,7 +53,8 @@ os_map_file(u8 *name)
 s32
 main(s32 argc, char *argv[])
 {
-	str8 file = os_map_file((u8 *)argv[0]);
-	elfinspect(file);
+	Arena arena = os_arena_new(MB(32));
+	str8 file   = os_map_file((u8 *)argv[0]);
+	elfinspect(arena, file);
 	return 0;
 }
