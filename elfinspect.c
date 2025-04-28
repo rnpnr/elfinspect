@@ -633,39 +633,39 @@ str8_reader_from_str8(str8 s)
 }
 
 function u16
-str8_read_u16(str8_reader *r, ELFEndianKind endian)
+str8_read_u16(str8_reader *r, b32 big_endian)
 {
 	u16 result = 0;
 	r->errors |= r->index + 2 > r->count;
 	if (!r->errors) {
-		if (endian == EEK_BIG) result = u16_host_from_be(r->data + r->index);
-		else                   result = u16_host_from_le(r->data + r->index);
+		if (big_endian) result = u16_host_from_be(r->data + r->index);
+		else            result = u16_host_from_le(r->data + r->index);
 		r->index += 2;
 	}
 	return result;
 }
 
 function u32
-str8_read_u32(str8_reader *r, ELFEndianKind endian)
+str8_read_u32(str8_reader *r, b32 big_endian)
 {
 	u32 result = 0;
 	r->errors |= r->index + 4 > r->count;
 	if (!r->errors) {
-		if (endian == EEK_BIG) result = u32_host_from_be(r->data + r->index);
-		else                   result = u32_host_from_le(r->data + r->index);
+		if (big_endian) result = u32_host_from_be(r->data + r->index);
+		else            result = u32_host_from_le(r->data + r->index);
 		r->index += 4;
 	}
 	return result;
 }
 
 function u64
-str8_read_u64(str8_reader *r, ELFEndianKind endian)
+str8_read_u64(str8_reader *r, b32 big_endian)
 {
 	u64 result = 0;
 	r->errors |= r->index + 8 > r->count;
 	if (!r->errors) {
-		if (endian == EEK_BIG) result = u32_host_from_be(r->data + r->index);
-		else                   result = u32_host_from_le(r->data + r->index);
+		if (big_endian) result = u32_host_from_be(r->data + r->index);
+		else            result = u32_host_from_le(r->data + r->index);
 		r->index += 8;
 	}
 	return result;
@@ -741,7 +741,7 @@ print_elf_header(ELFHeader *eh)
 	ELF_HEADER_MEMBERS
 	#undef X
 
-	#define X(ctype, name) printf(#name ": %*s", max_name_len - sizeof(#name) + 1, ""); \
+	#define X(ctype, name) printf(#name ": %*s", (s32)(max_name_len - sizeof(#name) + 1), ""); \
 	                       print_##ctype(eh->name); printf("\n");
 	ELF_HEADER_MEMBERS
 	#undef X
@@ -769,25 +769,26 @@ elf_header_from_file(ELFHeader *eh, str8 file)
 		eh->abi_version = file.data[8];
 
 		str8_reader reader = str8_reader_from_str8(str8_chop(file, 16));
-		eh->kind                            = str8_read_u16(&reader, eh->endianness);
-		eh->machine                         = str8_read_u16(&reader, eh->endianness);
-		eh->version                         = str8_read_u32(&reader, eh->endianness);
+		b32 big_endian     = eh->endianness == EEK_BIG;
+		eh->kind                            = str8_read_u16(&reader, big_endian);
+		eh->machine                         = str8_read_u16(&reader, big_endian);
+		eh->version                         = str8_read_u32(&reader, big_endian);
 		if (eh->format == EF_64) {
-			eh->entry_point_offset      = str8_read_u64(&reader, eh->endianness);
-			eh->program_header_offset   = str8_read_u64(&reader, eh->endianness);
-			eh->section_header_offset   = str8_read_u64(&reader, eh->endianness);
+			eh->entry_point_offset      = str8_read_u64(&reader, big_endian);
+			eh->program_header_offset   = str8_read_u64(&reader, big_endian);
+			eh->section_header_offset   = str8_read_u64(&reader, big_endian);
 		} else {
-			eh->entry_point_offset      = str8_read_u32(&reader, eh->endianness);
-			eh->program_header_offset   = str8_read_u32(&reader, eh->endianness);
-			eh->section_header_offset   = str8_read_u32(&reader, eh->endianness);
+			eh->entry_point_offset      = str8_read_u32(&reader, big_endian);
+			eh->program_header_offset   = str8_read_u32(&reader, big_endian);
+			eh->section_header_offset   = str8_read_u32(&reader, big_endian);
 		}
-		eh->flags                           = str8_read_u32(&reader, eh->endianness);
-		eh->elf_header_size                 = str8_read_u16(&reader, eh->endianness);
-		eh->program_header_entry_size       = str8_read_u16(&reader, eh->endianness);
-		eh->program_header_count            = str8_read_u16(&reader, eh->endianness);
-		eh->section_header_entry_size       = str8_read_u16(&reader, eh->endianness);
-		eh->section_header_count            = str8_read_u16(&reader, eh->endianness);
-		eh->section_header_name_table_index = str8_read_u16(&reader, eh->endianness);
+		eh->flags                           = str8_read_u32(&reader, big_endian);
+		eh->elf_header_size                 = str8_read_u16(&reader, big_endian);
+		eh->program_header_entry_size       = str8_read_u16(&reader, big_endian);
+		eh->program_header_count            = str8_read_u16(&reader, big_endian);
+		eh->section_header_entry_size       = str8_read_u16(&reader, big_endian);
+		eh->section_header_count            = str8_read_u16(&reader, big_endian);
+		eh->section_header_name_table_index = str8_read_u16(&reader, big_endian);
 		result = !reader.errors && file.data[6] == eh->version;
 	}
 	return result;
