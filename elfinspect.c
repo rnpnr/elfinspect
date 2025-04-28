@@ -3,7 +3,7 @@
 #define function      static
 
 /* TODO(rnp) platform specific */
-#define ASSERT(c) do { if (!(c)) asm("int3"); } while (0)
+#define ASSERT(c) do { if (!(c)) asm("int3; nop"); } while (0)
 #define TODO(c) ASSERT(c)
 
 #define countof(a) (sizeof(a) / sizeof(*a))
@@ -18,49 +18,83 @@ typedef struct {u8 *beg, *end;} Arena;
 #define str8(s) (str8){.len = countof(s) - 1, .data = (u8 *)s}
 typedef struct { iz len; u8 *data;} str8;
 
+typedef struct {
+	u8  *data;
+	iz   index;
+	iz   count;
+	b32  errors;
+} str8_reader;
+
 /* NOTE: platform api; defined here so that other platform symbols are not visible to this TU */
 function str8 os_map_file(u8 *);
 
-/* X(ctype, name) */
-#define ELF_HEADER_MEMBERS(ptrsize) \
-	X(u16,     type)      \
-	X(u16,     machine)   \
-	X(u32,     version)   \
-	X(ptrsize, entry)     \
-	X(ptrsize, phoff)     \
-	X(ptrsize, shoff)     \
-	X(u32,     flags)     \
-	X(u16,     ehsize)    \
-	X(u16,     phentsize) \
-	X(u16,     phnum)     \
-	X(u16,     shentsize) \
-	X(u16,     shnum)     \
-	X(u16,     shstrndx)
+/* X(name, value, pretty) */
+#define ELF_FORMATS \
+	X(EF_NONE, 0, "Unknown") \
+	X(EF_32,   1, "ELF32")   \
+	X(EF_64,   2, "ELF64")
 
-#define X(ctype, name) ctype name;
-typedef struct { u8 identifier[16]; ELF_HEADER_MEMBERS(u32) } ELFHeader32;
-typedef struct { u8 identifier[16]; ELF_HEADER_MEMBERS(u64) } ELFHeader64;
+#define ELF_ENDIANNESS \
+	X(EEK_NONE,   0, "Unknown")       \
+	X(EEK_LITTLE, 1, "Little-Endian") \
+	X(EEK_BIG,    2, "Big-Endian")
+
+#define ELF_OS_ABI \
+	X(ELF_ABI_SYSV,       0x00, "System-V")       \
+	X(ELF_ABI_HPUX,       0x01, "HP-UX")          \
+	X(ELF_ABI_NETBSD,     0x02, "NetBSD")         \
+	X(ELF_ABI_GNU,        0x03, "GNU Hurd")       \
+	X(ELF_ABI_SOLARIS,    0x06, "Solaris")        \
+	X(ELF_ABI_AIX,        0x07, "AIX")            \
+	X(ELF_ABI_IRIX,       0x08, "IRIX")           \
+	X(ELF_ABI_FREEBSD,    0x09, "FreeBSD")        \
+	X(ELF_ABI_TRU64,      0x0a, "Tru64")          \
+	X(ELF_ABI_MODESTO,    0x0b, "Novel Modesto")  \
+	X(ELF_ABI_OPENBSD,    0x0c, "OpenBSD")        \
+	X(ELF_ABI_OPENVMS,    0x0d, "OpenVMS")        \
+	X(ELF_ABI_NONSTOP,    0x0e, "NonStop Kernel") \
+	X(ELF_ABI_AROS,       0x0f, "AROS")           \
+	X(ELF_ABI_FENIX,      0x10, "Fenix")          \
+	X(ELF_ABI_ARM,        0x61, "ARM")            \
+	X(ELF_ABI_STANDALONE, 0xff, "Free Standing")
+
+#define ELF_KINDS \
+	X(ELF_KIND_NONE,   0x0000, "Unknown")       \
+	X(ELF_KIND_REL,    0x0001, "Relocatable")   \
+	X(ELF_KIND_EXEC,   0x0002, "Executable")    \
+	X(ELF_KIND_DYN,    0x0003, "Shared Object") \
+	X(ELF_KIND_CORE,   0x0004, "Core Dump")
+
+#define X(name, value, pretty) name = value,
+typedef enum { ELF_FORMATS }    ELFFormat;
+typedef enum { ELF_ENDIANNESS } ELFEndianKind;
+typedef enum { ELF_OS_ABI }     ELFABIKind;
+typedef enum { ELF_KINDS }      ELFKind;
 #undef X
 
-typedef enum {
-	EK_NONE = 0x00,
-	EK_32   = 0x01,
-	EK_64   = 0x02,
-} ELFKind;
+/* X(ctype, name) */
+#define ELF_HEADER_MEMBERS \
+	X(ELFFormat,     format)                          \
+	X(ELFEndianKind, endianness)                      \
+	X(ELFABIKind,    abi)                             \
+	X(ELFKind,       kind)                            \
+	X(u16,           abi_version)                     \
+	X(u16,           machine)                         \
+	X(u32,           version)                         \
+	X(u64,           entry_point_offset)              \
+	X(u64,           program_header_offset)           \
+	X(u64,           section_header_offset)           \
+	X(u32,           flags)                           \
+	X(u16,           elf_header_size)                 \
+	X(u16,           program_header_entry_size)       \
+	X(u16,           program_header_count)            \
+	X(u16,           section_header_entry_size)       \
+	X(u16,           section_header_count)            \
+	X(u16,           section_header_name_table_index)
 
-typedef struct {
-	union {
-		ELFHeader64 eh64;
-		ELFHeader32 eh32;
-	};
-	ELFKind kind;
-} ELFHeader;
-
-typedef enum {
-	EEK_NONE   = 0x00,
-	EEK_LITTLE = 0x01,
-	EEK_BIG    = 0x02,
-} ELFEndianKind;
+#define X(ctype, name) ctype name;
+typedef struct {ELF_HEADER_MEMBERS} ELFHeader;
+#undef X
 
 typedef enum {
 	ESK_NULL         = 0,
@@ -403,6 +437,80 @@ typedef struct DWARFAbbreviation {
 	struct DWARFAbbreviation *next;
 } DWARFAbbreviation;
 
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#error "reader functions not yet implemented for big endian hosts!"
+#else
+function u16
+u16_host_from_be(u8 *s)
+{
+	u16 result = 0;
+	result |= s[0]; result <<= 8;
+	result |= s[1];
+	return result;
+}
+
+function u16
+u16_host_from_le(u8 *s)
+{
+	u16 result = 0;
+	result |= s[1]; result <<= 8;
+	result |= s[0];
+	return result;
+}
+
+function u32
+u32_host_from_be(u8 *s)
+{
+	u32 result = 0;
+	result |= s[0]; result <<= 8;
+	result |= s[1]; result <<= 8;
+	result |= s[2]; result <<= 8;
+	result |= s[3];
+	return result;
+}
+
+function u32
+u32_host_from_le(u8 *s)
+{
+	u32 result = 0;
+	result |= s[3]; result <<= 8;
+	result |= s[2]; result <<= 8;
+	result |= s[1]; result <<= 8;
+	result |= s[0];
+	return result;
+}
+
+function u64
+u64_host_from_be(u8 *s)
+{
+	u64 result = 0;
+	result |= s[0]; result <<= 8;
+	result |= s[1]; result <<= 8;
+	result |= s[2]; result <<= 8;
+	result |= s[3]; result <<= 8;
+	result |= s[4]; result <<= 8;
+	result |= s[5]; result <<= 8;
+	result |= s[6]; result <<= 8;
+	result |= s[7];
+	return result;
+}
+
+function u64
+u64_host_from_le(u8 *s)
+{
+	u64 result = 0;
+	result |= s[7]; result <<= 8;
+	result |= s[6]; result <<= 8;
+	result |= s[5]; result <<= 8;
+	result |= s[4]; result <<= 8;
+	result |= s[3]; result <<= 8;
+	result |= s[2]; result <<= 8;
+	result |= s[1]; result <<= 8;
+	result |= s[0];
+	return result;
+}
+#endif
+
 #define zero_struct(s) mem_clear(s, 0, sizeof(*s));
 function void *
 mem_clear(void *restrict _s, u8 byte, iz size)
@@ -514,6 +622,54 @@ str8_read_uleb128(str8 a, u64 *uleb128)
 	return result;
 }
 
+function str8_reader
+str8_reader_from_str8(str8 s)
+{
+	str8_reader result = {0};
+	result.data  = s.data;
+	result.count = s.len;
+	return result;
+}
+
+function u16
+str8_read_u16(str8_reader *r, ELFEndianKind endian)
+{
+	u16 result = 0;
+	r->errors |= r->index + 2 > r->count;
+	if (!r->errors) {
+		if (endian == EEK_BIG) result = u16_host_from_be(r->data + r->index);
+		else                   result = u16_host_from_le(r->data + r->index);
+		r->index += 2;
+	}
+	return result;
+}
+
+function u32
+str8_read_u32(str8_reader *r, ELFEndianKind endian)
+{
+	u32 result = 0;
+	r->errors |= r->index + 4 > r->count;
+	if (!r->errors) {
+		if (endian == EEK_BIG) result = u32_host_from_be(r->data + r->index);
+		else                   result = u32_host_from_le(r->data + r->index);
+		r->index += 4;
+	}
+	return result;
+}
+
+function u64
+str8_read_u64(str8_reader *r, ELFEndianKind endian)
+{
+	u64 result = 0;
+	r->errors |= r->index + 8 > r->count;
+	if (!r->errors) {
+		if (endian == EEK_BIG) result = u32_host_from_be(r->data + r->index);
+		else                   result = u32_host_from_le(r->data + r->index);
+		r->index += 8;
+	}
+	return result;
+}
+
 function void
 print_u64(u64 v)
 {
@@ -524,33 +680,70 @@ function void print_u16(u16 v) { print_u64(v); }
 function void print_u32(u32 v) { print_u64(v); }
 
 function void
-print_elf_header_32(ELFHeader *eh)
+print_ELFFormat(ELFFormat format)
 {
-	ASSERT(eh->kind == EK_32);
-	printf("TODO: print 32 bit elf header\n");
+	#define X(name, value, pretty) [name] = str8(pretty),
+	local_persist str8 format_pretty[] = {ELF_FORMATS};
+	#undef X
+	if (format < countof(format_pretty) && format_pretty[format].len) {
+		printf("%.*s", (s32)format_pretty[format].len, format_pretty[format].data);
+	} else {
+		printf("Invalid");
+	}
 }
 
 function void
-print_elf_header_64(ELFHeader *eh)
+print_ELFEndianKind(ELFEndianKind kind)
 {
-	ASSERT(eh->kind == EK_64);
-	printf("ELF Header:\nidentifier: 0x");
-	for (u32 i = 0; i < countof(eh->eh64.identifier); i++)
-		printf(" %02x", eh->eh64.identifier[i]);
-	#define X(ctype, name) printf("\n"); printf(#name ": "); print_##ctype(eh->eh64.name);
-	ELF_HEADER_MEMBERS(u64)
+	#define X(name, value, pretty) [name] = str8(pretty),
+	local_persist str8 kind_pretty[] = {ELF_ENDIANNESS};
 	#undef X
-	printf("\n");
+	if (kind < countof(kind_pretty) && kind_pretty[kind].len) {
+		printf("%.*s", (s32)kind_pretty[kind].len, kind_pretty[kind].data);
+	} else {
+		printf("Invalid");
+	}
+}
+
+function void
+print_ELFABIKind(ELFABIKind kind)
+{
+	#define X(name, value, pretty) [name] = str8(pretty),
+	local_persist str8 kind_pretty[] = {ELF_OS_ABI};
+	#undef X
+	if (kind < countof(kind_pretty) && kind_pretty[kind].len) {
+		printf("%.*s", (s32)kind_pretty[kind].len, kind_pretty[kind].data);
+	} else {
+		printf("Invalid");
+	}
+}
+
+function void
+print_ELFKind(ELFKind kind)
+{
+	#define X(name, value, pretty) [name] = str8(pretty),
+	local_persist str8 kind_pretty[] = {ELF_KINDS};
+	#undef X
+	if (kind < countof(kind_pretty) && kind_pretty[kind].len) {
+		printf("%.*s", (s32)kind_pretty[kind].len, kind_pretty[kind].data);
+	} else {
+		printf("Invalid");
+	}
 }
 
 function void
 print_elf_header(ELFHeader *eh)
 {
-	switch (eh->kind) {
-	case EK_32: print_elf_header_32(eh);     break;
-	case EK_64: print_elf_header_64(eh);     break;
-	default: printf("invalid elf header\n"); break;
-	}
+	printf("ELF Header:\n");
+	s32 max_name_len = 0;
+	#define X(ctype, name) if (max_name_len < sizeof(#name) - 1) max_name_len = sizeof(#name) - 1;
+	ELF_HEADER_MEMBERS
+	#undef X
+
+	#define X(ctype, name) printf(#name ": %*s", max_name_len - sizeof(#name) + 1, ""); \
+	                       print_##ctype(eh->name); printf("\n");
+	ELF_HEADER_MEMBERS
+	#undef X
 }
 
 function b32
@@ -564,34 +757,55 @@ is_elf(str8 file)
 	return result;
 }
 
-function ELFHeader
-elf_header_from_file(str8 file)
+function b32
+elf_header_from_file(ELFHeader *eh, str8 file)
 {
-	ELFHeader result = {0};
-	ASSERT(file.len > sizeof(ELFHeader64));
-	ASSERT(file.data[4] == EK_64);
-	ASSERT(file.data[5] == EEK_LITTLE);
+	b32 result = 0;
+	if (is_elf(file)) {
+		eh->format      = file.data[4];
+		eh->endianness  = file.data[5];
+		eh->abi         = file.data[7];
+		eh->abi_version = file.data[8];
 
-	result.eh64 = *(ELFHeader64 *)file.data;
-	result.kind = file.data[4];
-
+		str8_reader reader = str8_reader_from_str8(str8_chop(file, 16));
+		eh->kind                            = str8_read_u16(&reader, eh->endianness);
+		eh->machine                         = str8_read_u16(&reader, eh->endianness);
+		eh->version                         = str8_read_u32(&reader, eh->endianness);
+		if (eh->format == EF_64) {
+			eh->entry_point_offset      = str8_read_u64(&reader, eh->endianness);
+			eh->program_header_offset   = str8_read_u64(&reader, eh->endianness);
+			eh->section_header_offset   = str8_read_u64(&reader, eh->endianness);
+		} else {
+			eh->entry_point_offset      = str8_read_u32(&reader, eh->endianness);
+			eh->program_header_offset   = str8_read_u32(&reader, eh->endianness);
+			eh->section_header_offset   = str8_read_u32(&reader, eh->endianness);
+		}
+		eh->flags                           = str8_read_u32(&reader, eh->endianness);
+		eh->elf_header_size                 = str8_read_u16(&reader, eh->endianness);
+		eh->program_header_entry_size       = str8_read_u16(&reader, eh->endianness);
+		eh->program_header_count            = str8_read_u16(&reader, eh->endianness);
+		eh->section_header_entry_size       = str8_read_u16(&reader, eh->endianness);
+		eh->section_header_count            = str8_read_u16(&reader, eh->endianness);
+		eh->section_header_name_table_index = str8_read_u16(&reader, eh->endianness);
+		result = !reader.errors && file.data[6] == eh->version;
+	}
 	return result;
 }
 
 function ELFSectionHeader *
 elf_extract_section_headers(Arena *a, str8 file, ELFHeader *eh)
 {
-	TODO(eh->kind == EK_64);
-	TODO(eh->eh64.identifier[5] == EEK_LITTLE);
-	TODO(file.len >= eh->eh64.shoff + eh->eh64.shentsize * eh->eh64.shnum);
-	u32 sections = eh->eh64.shnum;
+	TODO(eh->format == EF_64);
+	TODO(eh->endianness == EEK_LITTLE);
+	TODO(file.len >= eh->section_header_offset + eh->section_header_entry_size * eh->section_header_count);
+	u32 sections = eh->section_header_count;
 	ELFSectionHeader *result = alloc(a, ELFSectionHeader, sections);
 	for (u32 i = 0; i < sections; i++) {
-		iz offset = eh->eh64.shoff + eh->eh64.shentsize * i;
+		iz offset = eh->section_header_offset + eh->section_header_entry_size * i;
 		result[i].sh64 = *(ELFSectionHeader64 *)(file.data + offset);
 	}
 
-	u8 *str_tab = file.data + result[eh->eh64.shstrndx].sh64.offset;
+	u8 *str_tab = file.data + result[eh->section_header_name_table_index].sh64.offset;
 	for (u32 i = 0; i < sections; i++)
 		result[i].name = c_str_to_str8(str_tab + result[i].sh64.name_table_offset);
 
@@ -676,25 +890,28 @@ elfinspect(Arena arena, str8 file)
 	b32 result = is_elf(file);
 
 	if (result) {
-		ELFHeader header = elf_header_from_file(file);
+		ELFHeader header = {0};
+		if (!elf_header_from_file(&header, file)) {
+			return 1;
+		}
 		ELFSectionHeader *sections = elf_extract_section_headers(&arena, file, &header);
 		print_elf_header(&header);
 		printf("\nSections:\n");
-		for (u32 i = 0; i < header.eh64.shnum; i++) {
-			printf("[%u]:", i);
+		for (u32 i = 0; i < header.section_header_count; i++) {
+			printf("[%2u]:", i);
 			str8 name = sections[i].name;
 			if (name.len) printf(" %.*s", (s32)name.len, name.data);
 			printf("\n");
 		}
 
 		ELFSection debug_info  = elf_lookup_section(str8(".debug_info"), file,
-		                                            sections, header.eh64.shnum);
+		                                            sections, header.section_header_count);
 		ELFSection debug_abbrv = elf_lookup_section(str8(".debug_abbrev"), file,
-		                                            sections, header.eh64.shnum);
+		                                            sections, header.section_header_count);
 		ELFSection debug_str_offsets = elf_lookup_section(str8(".debug_str_offsets"), file,
-		                                                  sections, header.eh64.shnum);
+		                                                  sections, header.section_header_count);
 		ELFSection debug_str = elf_lookup_section(str8(".debug_str"), file,
-		                                          sections, header.eh64.shnum);
+		                                          sections, header.section_header_count);
 
 		str8 d_info_reader = debug_info.store;
 		DWARFUnitHeader d_info_header = {0};
