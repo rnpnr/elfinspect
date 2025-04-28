@@ -1,3 +1,4 @@
+/* See LICENSE for license details. */
 #define local_persist static
 #define global        static
 #define function      static
