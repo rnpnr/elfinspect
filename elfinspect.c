@@ -653,7 +653,7 @@ da_reserve_(Arena *a, void *data, s16 *capacity, iz needed, iz align, iz size)
 }
 
 function str8
-c_str_to_str8(u8 *c_str)
+str8_from_c_str(u8 *c_str)
 {
 	str8 result = {.data = c_str};
 	if (c_str) while (*c_str) c_str++;
@@ -671,7 +671,7 @@ str8_equal(str8 a, str8 b)
 }
 
 function str8
-str8_chop(str8 a, iz length)
+str8_chop_at(str8 a, iz length)
 {
 	str8 result = {0};
 	if (length < a.len) {
@@ -681,30 +681,21 @@ str8_chop(str8 a, iz length)
 	return result;
 }
 
-function iz
-str8_read_uleb128(str8 a, u64 *uleb128)
-{
-	/* TODO(rnp): check for overflow ... */
-	iz result = 0;
-	iz shift  = 0;
-	u64 n     = 0;
-	while (result < a.len) {
-		u8 byte = a.data[result++];
-		n |= (u64)(byte & 0x7F) << shift;
-		if ((byte & 0x80) == 0)
-			break;
-		shift += 7;
-	}
-	*uleb128 = n;
-	return result;
-}
-
 function str8_reader
 str8_reader_from_str8(str8 s)
 {
 	str8_reader result = {0};
 	result.data  = s.data;
 	result.count = s.len;
+	return result;
+}
+
+function u8
+str8_read_u8(str8_reader *r)
+{
+	u8 result = 0;
+	r->errors |= r->index + 1 > r->count;
+	if (!r->errors) result = r->data[r->index++];
 	return result;
 }
 
@@ -743,6 +734,22 @@ str8_read_u64(str8_reader *r, b32 big_endian)
 		if (big_endian) result = u32_host_from_be(r->data + r->index);
 		else            result = u32_host_from_le(r->data + r->index);
 		r->index += 8;
+	}
+	return result;
+}
+
+function u64
+str8_read_uleb128(str8_reader *r)
+{
+	/* TODO(rnp): check for overflow ... */
+	iz  shift  = 0;
+	u64 result = 0;
+	while (r->index < r->count) {
+		u8 byte = r->data[r->index++];
+		result |= (u64)(byte & 0x7F) << shift;
+		if ((byte & 0x80) == 0)
+			break;
+		shift += 7;
 	}
 	return result;
 }
@@ -844,7 +851,7 @@ elf_header_from_file(ELFHeader *eh, str8 file)
 		eh->abi         = file.data[7];
 		eh->abi_version = file.data[8];
 
-		str8_reader reader = str8_reader_from_str8(str8_chop(file, 16));
+		str8_reader reader = str8_reader_from_str8(str8_chop_at(file, 16));
 		b32 big_endian     = eh->endianness == EEK_BIG;
 		eh->kind                            = str8_read_u16(&reader, big_endian);
 		eh->machine                         = str8_read_u16(&reader, big_endian);
@@ -927,13 +934,13 @@ elf_extract_section_headers(Arena *a, str8 file, ELFHeader *eh)
 	ELFSectionHeader *result = alloc(a, ELFSectionHeader, sections);
 	for (u32 i = 0; i < sections; i++) {
 		iz offset = eh->section_header_offset + eh->section_header_entry_size * i;
-		elf_section_header_from_str8(result + i, str8_chop(file, offset),
+		elf_section_header_from_str8(result + i, str8_chop_at(file, offset),
 		                             eh->endianness == EEK_BIG, eh->format == EF_32);
 	}
 
 	u8 *str_tab = file.data + result[eh->section_header_name_table_index].offset;
 	for (u32 i = 0; i < sections; i++)
-		result[i].name = c_str_to_str8(str_tab + result[i].name_table_offset);
+		result[i].name = str8_from_c_str(str_tab + result[i].name_table_offset);
 
 	return result;
 }
@@ -953,39 +960,34 @@ elf_lookup_section(str8 name, str8 file, ELFSectionHeader *shs, u32 sections_cou
 	return result;
 }
 
-function iz
-dwarf_read_unit_header(DWARFUnitHeader *duh, str8 store)
+function void
+dwarf_read_unit_header(str8_reader *store, DWARFUnitHeader *duh)
 {
-	iz result = 0;
 	/* TODO(rnp): context containing endianess, dwarf size */
-	duh->dwarf_64 = *(u32 *)store.data == 0xffffffff;
-	if (duh->dwarf_64) { result += 12; duh->length = *(u64 *)(store.data + 4); }
-	else               { result +=  4; duh->length = *(u32 *)(store.data);     }
-	duh->version = *(u16 *)(store.data + result);
-	result += 2;
-	if (duh->version == 5) duh->kind = store.data[result++];
-	duh->address_size = store.data[result++];
-	if (duh->dwarf_64) { duh->abbreviation_offset = *(u64 *)(store.data + result); result += 8; }
-	else               { duh->abbreviation_offset = *(u32 *)(store.data + result); result += 4; }
-	return result;
+	u32 test_length = str8_read_u32(store, 0);
+	duh->dwarf_64 = test_length == 0xffffffff;
+	if (duh->dwarf_64) duh->length = str8_read_u64(store, 0);
+	else               duh->length = test_length;
+	duh->version = str8_read_u16(store, 0);
+	if (duh->version == 5) duh->kind = str8_read_u8(store);
+	duh->address_size = str8_read_u8(store);
+	if (duh->dwarf_64) duh->abbreviation_offset = str8_read_u64(store, 0);
+	else               duh->abbreviation_offset = str8_read_u32(store, 0);
 }
 
 function iz
 dwarf_parse_abbrevation(Arena *a, DWARFAbbreviation *abbrv, str8 table)
 {
+	str8_reader table_reader = str8_reader_from_str8(table);
 	iz table_start_size = table.len;
-	iz result = 0;
-	table = str8_chop(table, str8_read_uleb128(table, &abbrv->abbreviation_code));
-	u64 abbrv_kind = 0;
-	table = str8_chop(table, str8_read_uleb128(table, &abbrv_kind));
-	abbrv->kind = abbrv_kind;
-	if (table.len < 1) return table_start_size;
-	abbrv->has_children = *table.data;
-	table = str8_chop(table, 1);
+	abbrv->abbreviation_code = str8_read_uleb128(&table_reader);
+	abbrv->kind              = str8_read_uleb128(&table_reader);
+	if (table_reader.count - table_reader.index < 1)
+		return table_start_size;
+	abbrv->has_children = str8_read_u8(&table_reader);
 	for (;;) {
-		u64 attr_kind = 0, form_kind = 0;
-		table = str8_chop(table, str8_read_uleb128(table, &attr_kind));
-		table = str8_chop(table, str8_read_uleb128(table, &form_kind));
+		u64 attr_kind = str8_read_uleb128(&table_reader);
+		u64 form_kind = str8_read_uleb128(&table_reader);
 		TODO(form_kind != DFK_INDIRECT);
 		TODO(form_kind != DFK_IMPLICIT_CONST);
 		if (attr_kind) {
@@ -995,8 +997,7 @@ dwarf_parse_abbrevation(Arena *a, DWARFAbbreviation *abbrv, str8 table)
 			break;
 		}
 	}
-	result = table_start_size - table.len;
-	return result;
+	return table_reader.index;
 }
 
 function DWARFAbbreviation
@@ -1005,7 +1006,7 @@ dwarf_lookup_abbreviation(Arena *a, str8 table, u64 key)
 	DWARFAbbreviation result = {0};
 	while (key != result.abbreviation_code && table.len > 1) {
 		result.count = 0;
-		table = str8_chop(table, dwarf_parse_abbrevation(a, &result, table));
+		table = str8_chop_at(table, dwarf_parse_abbrevation(a, &result, table));
 	}
 	return result;
 }
@@ -1057,12 +1058,17 @@ elf_inspect_file(Arena arena, str8 file)
 		ELFSection debug_str = elf_lookup_section(str8(".debug_str"), file,
 		                                          sections, header.section_header_count);
 
-		str8 d_info_reader = debug_info.store;
+		/* TODO(rnp): cleanup */
+		if (debug_info.store.len == 0) {
+			printf("No Debug Info!\n");
+			return 0;
+		}
+
+		str8_reader d_info_reader = str8_reader_from_str8(debug_info.store);
 		DWARFUnitHeader d_info_header = {0};
-		d_info_reader = str8_chop(d_info_reader, dwarf_read_unit_header(&d_info_header, d_info_reader));
-		u64 abbreviation_code = 0;
-		str8 abbreviation_table = str8_chop(debug_abbrv.store, d_info_header.abbreviation_offset);
-		d_info_reader = str8_chop(d_info_reader, str8_read_uleb128(d_info_reader, &abbreviation_code));
+		dwarf_read_unit_header(&d_info_reader, &d_info_header);
+		str8 abbreviation_table = str8_chop_at(debug_abbrv.store, d_info_header.abbreviation_offset);
+		u64  abbreviation_code  = str8_read_uleb128(&d_info_reader);
 		DWARFAbbreviation abbrv = dwarf_lookup_abbreviation(&arena, abbreviation_table, abbreviation_code);
 
 		printf("\nFirst DWARF DIE:\n");
@@ -1072,28 +1078,30 @@ elf_inspect_file(Arena arena, str8 file)
 				continue;
 
 			switch (attr.kind) {
-			case DATK_PRODUCER:      printf("producer:      "); break;
-			case DATK_LANGUAGE:      printf("language:      "); break;
-			case DATK_ADDR_BASE:     printf("addr base:     "); break;
-			case DATK_LOCLISTS_BASE: printf("loc list base: "); break;
+			case DATK_PRODUCER:      printf("producer:        "); break;
+			case DATK_LANGUAGE:      printf("language:        "); break;
+			case DATK_ADDR_BASE:     printf("addr base:       "); break;
+			case DATK_LOCLISTS_BASE: printf("loc list base:   "); break;
+			case DATK_RNGLISTS_BASE: printf("range list base: "); break;
 			default: assert(0); break;
 			}
 
 			switch (attr.form_kind) {
 			case DFK_STRX1: {
-				u32 str_offset_offset = *d_info_reader.data;
-				d_info_reader = str8_chop(d_info_reader, 1);
-				u32 str_offset = *(u32 *)(debug_str_offsets.store.data + str_offset_offset);
+				u32 str_offset_offset = str8_read_u8(&d_info_reader);
+				u32 str_offset;
+				if (header.endianness == EEK_BIG)
+					str_offset = u32_host_from_be(debug_str_offsets.store.data + str_offset_offset);
+				else
+					str_offset = u32_host_from_le(debug_str_offsets.store.data + str_offset_offset);
 				printf("%s", (char *)debug_str.store.data + str_offset);
 			} break;
 			case DFK_DATA2: {
-				u32 data = *(u16 *)d_info_reader.data;
-				d_info_reader = str8_chop(d_info_reader, 2);
+				u32 data = str8_read_u16(&d_info_reader, header.endianness == EEK_BIG);
 				printf("%u", data);
 			} break;
 			case DFK_SEC_OFFSET: {
-				u32 data = *(u32 *)d_info_reader.data;
-				d_info_reader = str8_chop(d_info_reader, 4);
+				u32 data = str8_read_u32(&d_info_reader, header.endianness == EEK_BIG);
 				printf("%u", data);
 			} break;
 			default: assert(0); break;
