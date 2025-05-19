@@ -439,7 +439,75 @@ typedef struct DWARFAbbreviation {
 } DWARFAbbreviation;
 
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-#error "reader functions not yet implemented for big endian hosts!"
+function u16
+u16_host_from_be(u8 *s)
+{
+	u16 result = 0;
+	result |= s[1]; result <<= 8;
+	result |= s[0];
+	return result;
+}
+
+function u16
+u16_host_from_le(u8 *s)
+{
+	u16 result = 0;
+	result |= s[0]; result <<= 8;
+	result |= s[1];
+	return result;
+}
+
+function u32
+u32_host_from_be(u8 *s)
+{
+	u32 result = 0;
+	result |= s[3]; result <<= 8;
+	result |= s[2]; result <<= 8;
+	result |= s[1]; result <<= 8;
+	result |= s[0];
+	return result;
+}
+
+function u32
+u32_host_from_le(u8 *s)
+{
+	u32 result = 0;
+	result |= s[0]; result <<= 8;
+	result |= s[1]; result <<= 8;
+	result |= s[2]; result <<= 8;
+	result |= s[3];
+	return result;
+}
+
+function u64
+u64_host_from_be(u8 *s)
+{
+	u64 result = 0;
+	result |= s[7]; result <<= 8;
+	result |= s[6]; result <<= 8;
+	result |= s[5]; result <<= 8;
+	result |= s[4]; result <<= 8;
+	result |= s[3]; result <<= 8;
+	result |= s[2]; result <<= 8;
+	result |= s[1]; result <<= 8;
+	result |= s[0];
+	return result;
+}
+
+function u64
+u64_host_from_le(u8 *s)
+{
+	u64 result = 0;
+	result |= s[0]; result <<= 8;
+	result |= s[1]; result <<= 8;
+	result |= s[2]; result <<= 8;
+	result |= s[3]; result <<= 8;
+	result |= s[4]; result <<= 8;
+	result |= s[5]; result <<= 8;
+	result |= s[6]; result <<= 8;
+	result |= s[7];
+	return result;
+}
 #else
 function u16
 u16_host_from_be(u8 *s)
