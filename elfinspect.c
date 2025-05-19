@@ -1,19 +1,32 @@
 /* See LICENSE for license details. */
 
-/* TODO(rnp):
- * [ ]: remove all the unaligned reads so that this compiles with optimizations on
- */
 #define local_persist static
 #define global        static
 #define function      static
 
-/* TODO(rnp) platform specific */
-#define assert(c) do { if (!(c)) asm("int3; nop"); } while (0)
+#ifdef __ARM_ARCH_ISA_A64
+#define debugbreak() asm("brk 0xf000")
+#elif __x86_64__
+#define debugbreak() asm("int3; nop")
+#else
+#error Unsupported Architecture
+#endif
+#define assert(c) do { if (!(c)) debugbreak(); } while (0)
 #define TODO(c) assert(c)
+
+#ifdef __clang__
+#define read_only __attribute__((section(".rodata")))
+#else
+/* TODO(rnp): how to do this with gcc */
+#define read_only
+#endif
 
 #define countof(a) (sizeof(a) / sizeof(*a))
 
 #define static_assert(c, msg) _Static_assert(c, msg)
+
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#define MAX(a, b) ((a) < (b) ? (b) : (a))
 
 #define KB(a) ((u64)a << 10ULL)
 #define MB(a) ((u64)a << 20ULL)
@@ -21,23 +34,35 @@
 typedef struct {u8 *beg, *end;} Arena;
 
 #define str8(s) (str8){.len = countof(s) - 1, .data = (u8 *)s}
-typedef struct { iz len; u8 *data;} str8;
+typedef struct { sz len; u8 *data;} str8;
 
 typedef struct {
 	u8  *data;
-	iz   index;
-	iz   count;
+	sz   index;
+	sz   count;
 	b32  errors;
-} str8_reader;
+} str8_stream;
+
+typedef struct {
+	sz *max_column_widths;
+
+	str8 *data;
+	s16   capacity;
+	s16   count;
+
+	u16  columns;
+} Table;
 
 typedef struct {
 	u8 *argv0;
-
 	struct {
 		u8 **data;
 		s16  capacity;
 		s16  count;
 	} file_names;
+
+	b32 sections;
+	b32 header;
 } Options;
 
 /* NOTE: platform api; defined here so that other platform symbols are not visible to this TU */
@@ -111,32 +136,33 @@ typedef enum { ELF_KINDS }      ELFKind;
 typedef struct {ELF_HEADER_MEMBERS} ELFHeader;
 #undef X
 
-typedef enum {
-	ESK_NULL         = 0,
-	ESK_PROGBITS     = 1,
-	ESK_SYMBOL_TABLE = 2,
-	ESK_STR_TABLE    = 3,
-	ESK_RELA         = 4,
-	ESK_HASH         = 5,
-	ESK_DYNAMIC      = 6,
-	ESK_NOTE         = 7,
-	ESK_NOBITS       = 8,
-	ESK_REL          = 9,
-	ESK_SHLIB        = 10,
-	ESK_DYNSYM       = 11,
-	ESK_INIT_ARRAY   = 14,
-	ESK_FINI_ARRAY   = 15,
-	ESK_PREINIT_ARR  = 16,
-	ESK_GROUP        = 17,
-	ESK_SYMTAB_SHND  = 18,
-	ESK_RELR         = 19,
-	ESK_NUM          = 20,
-	ESK_LOPROC       = 0x70000000,
-	ESK_HIPROC       = 0x7fffffff,
-	ESK_LOUSER       = 0x80000000,
-	ESK_HIUSER       = 0x8fffffff,
-} ELFSectionKind;
-static_assert(sizeof(ELFSectionKind) == 4, "sizeof(ELFSectionKind) must be 4 bytes");
+/* X(name, value, pretty) */
+/* NOTE: base section kinds; extended kinds handled directly */
+#define ELFSectionKinds \
+	X(NULL,         0x00, "null")            \
+	X(PROGBITS,     0x01, "progdata")        \
+	X(SYMBOL_TABLE, 0x02, "symtab")          \
+	X(STR_TABLE,    0x03, "strtab")          \
+	X(RELA,         0x04, "rela")            \
+	X(HASH,         0x05, "symhashtab")      \
+	X(DYNAMIC,      0x06, "dynamic")         \
+	X(NOTE,         0x07, "notes")           \
+	X(NOBITS,       0x08, "nobits")          \
+	X(REL,          0x09, "rel")             \
+	X(SHLIB,        0x0A, "shlib")           \
+	X(DYNSYM,       0x0B, "dynsym")          \
+	X(INIT_ARRAY,   0x0E, "init_array")      \
+	X(FINI_ARRAY,   0x0F, "fini_array")      \
+	X(PREINIT_ARR,  0x10, "preinit_array")   \
+	X(GROUP,        0x11, "group")           \
+	X(SYMTAB_SHND,  0x12, "extended symtab") \
+	X(RELR,         0x13, "relr")            \
+	X(NUM,          0x14, "number")
+
+
+#define X(name, value, pretty) ELFSectionKind_ ## name = value,
+typedef enum {ELFSectionKinds ELFSectionKind_COUNT} ELFSectionKind;
+#undef X
 
 /* X(ctype, read32, read64, name) */
 #define ELF_SECTION_HEADER_MEMBERS \
@@ -590,29 +616,29 @@ u64_host_from_le(u8 *s)
 
 #define zero_struct(s) mem_clear(s, 0, sizeof(*s));
 function void *
-mem_clear(void *restrict _s, u8 byte, iz size)
+mem_clear(void *restrict _s, u8 byte, sz size)
 {
 	u8 *s = _s;
-	for (iz i = 0; i < size; i++)
+	for (sz i = 0; i < size; i++)
 		s[i] = byte;
 	return s;
 }
 
 function void *
-mem_copy(void *restrict dest, void *restrict src, iz size)
+mem_copy(void *restrict dest, void *restrict src, sz size)
 {
 	u8 *s = src, *d = dest;
-	for (iz i = 0; i < size; i++)
+	for (sz i = 0; i < size; i++)
 		d[i] = s[i];
 	return dest;
 }
 
-#define alloc(a, t, c) (t *)alloc_(a, _Alignof(t), sizeof(t), c)
+#define push_array(a, t, c) (t *)alloc_(a, _Alignof(t), sizeof(t), c)
 function void *
-alloc_(Arena *a, iz alignment, iz size, iz count)
+alloc_(Arena *a, sz alignment, sz size, sz count)
 {
-	iz capacity = a->end - a->beg;
-	iz padding  = -(uintptr_t)a->beg & (alignment - 1);
+	sz capacity = a->end - a->beg;
+	sz padding  = -(uintptr_t)a->beg & (alignment - 1);
 	if ((capacity - padding) / size  < count) {
 		assert(0 && "OOM: buy more ram lol");
 	}
@@ -633,23 +659,44 @@ enum { DA_INITIAL_CAP = 4 };
     : (s)->data + (s)->count++)
 
 function void *
-da_reserve_(Arena *a, void *data, s16 *capacity, iz needed, iz align, iz size)
+da_reserve_(Arena *a, void *data, s16 *capacity, sz needed, sz align, sz size)
 {
-	iz cap = *capacity;
+	sz cap = *capacity;
 
 	/* NOTE(rnp): handle both 0 initialized DAs and DAs that need to be moved (they started
 	 * on the stack or someone allocated something in the middle of the arena during usage) */
 	if (!data || a->beg != (u8 *)data + cap * size) {
-		void *copy = alloc_(a, size, align, cap);
+		void *copy = alloc_(a, align, size, cap);
 		if (data) mem_copy(copy, data, cap * size);
 		data = copy;
 	}
 
 	if (!cap) cap = DA_INITIAL_CAP;
 	while (cap < needed) cap *= 2;
-	alloc_(a, size, align, cap - *capacity);
+	alloc_(a, align, size, cap - *capacity);
 	*capacity = cap;
 	return data;
+}
+
+function str8
+arena_commit_str8_stream(Arena *a, str8_stream *s)
+{
+	assert(s->data == a->beg);
+	str8 result = {.data = s->data, .len = s->index};
+	a->beg   += s->index;
+	s->count -= s->index;
+	s->data   = a->beg;
+	s->index  = 0;
+	return result;
+}
+
+function str8_stream
+str8_stream_from_arena(Arena arena)
+{
+	str8_stream result = {0};
+	result.data  = arena.beg;
+	result.count = arena.end - arena.beg;
+	return result;
 }
 
 function str8
@@ -665,13 +712,13 @@ function b32
 str8_equal(str8 a, str8 b)
 {
 	b32 result = a.len == b.len;
-	for (iz i = 0; result && i < a.len; i++)
+	for (sz i = 0; result && i < a.len; i++)
 		result &= a.data[i] == b.data[i];
 	return result;
 }
 
 function str8
-str8_chop_at(str8 a, iz length)
+str8_chop_at(str8 a, sz length)
 {
 	str8 result = {0};
 	if (length < a.len) {
@@ -681,17 +728,17 @@ str8_chop_at(str8 a, iz length)
 	return result;
 }
 
-function str8_reader
+function str8_stream
 str8_reader_from_str8(str8 s)
 {
-	str8_reader result = {0};
+	str8_stream result = {0};
 	result.data  = s.data;
 	result.count = s.len;
 	return result;
 }
 
 function u8
-str8_read_u8(str8_reader *r)
+str8_read_u8(str8_stream *r)
 {
 	u8 result = 0;
 	r->errors |= r->index + 1 > r->count;
@@ -700,7 +747,7 @@ str8_read_u8(str8_reader *r)
 }
 
 function u16
-str8_read_u16(str8_reader *r, b32 big_endian)
+str8_read_u16(str8_stream *r, b32 big_endian)
 {
 	u16 result = 0;
 	r->errors |= r->index + 2 > r->count;
@@ -713,7 +760,7 @@ str8_read_u16(str8_reader *r, b32 big_endian)
 }
 
 function u32
-str8_read_u32(str8_reader *r, b32 big_endian)
+str8_read_u32(str8_stream *r, b32 big_endian)
 {
 	u32 result = 0;
 	r->errors |= r->index + 4 > r->count;
@@ -726,7 +773,7 @@ str8_read_u32(str8_reader *r, b32 big_endian)
 }
 
 function u64
-str8_read_u64(str8_reader *r, b32 big_endian)
+str8_read_u64(str8_stream *r, b32 big_endian)
 {
 	u64 result = 0;
 	r->errors |= r->index + 8 > r->count;
@@ -739,10 +786,10 @@ str8_read_u64(str8_reader *r, b32 big_endian)
 }
 
 function u64
-str8_read_uleb128(str8_reader *r)
+str8_read_uleb128(str8_stream *r)
 {
 	/* TODO(rnp): check for overflow ... */
-	iz  shift  = 0;
+	sz  shift  = 0;
 	u64 result = 0;
 	while (r->index < r->count) {
 		u8 byte = r->data[r->index++];
@@ -830,14 +877,103 @@ print_elf_header(ELFHeader *eh)
 	#undef X
 }
 
+function void
+str8_stream_append(str8_stream *s, void *restrict data, sz size)
+{
+	s->errors |= s->count - s->index < size;
+	if (!s->errors) {
+		mem_copy(s->data + s->index, data, size);
+		s->index += size;
+	}
+}
+
+function void
+str8_stream_print_byte(str8_stream *s, u8 byte)
+{
+	str8_stream_append(s, &byte, 1);
+}
+
+function void
+str8_stream_print_str8(str8_stream *s, str8 str)
+{
+	str8_stream_append(s, str.data, str.len);
+}
+
+function void
+str8_stream_print_u64(str8_stream *s, u64 n)
+{
+	u8 buffer[64];
+	u8 *end = buffer + sizeof(buffer);
+	u8 *beg = end;
+	do { *--beg = '0' + (n % 10); } while (n /= 10);
+	str8_stream_append(s, beg, end - beg);
+}
+
+function void
+str8_stream_print_u64_hex(str8_stream *s, u64 n)
+{
+	u8 buffer[16];
+	u8 *end = buffer + sizeof(buffer);
+	u8 *beg = end;
+	while (n) {
+		*--beg = "0123456789abcdef"[n & 0x0Fu];
+		n >>= 4;
+	}
+	while (end - beg < 2) *--beg = '0';
+	str8_stream_append(s, beg, end - beg);
+}
+
+function void
+str8_stream_print_elf_section_header_kind(str8_stream *s, ELFSectionKind kind)
+{
+	#define X(name, value, pretty) [ELFSectionKind_##name] = str8(pretty),
+	read_only local_persist str8 kind_pretty[ELFSectionKind_COUNT] = {ELFSectionKinds};
+	#undef X
+	if (kind_pretty[MIN(kind, ELFSectionKind_COUNT - 1)].len) {
+		str8_stream_print_str8(s, kind_pretty[MIN(kind, ELFSectionKind_COUNT - 1)]);
+	} else {
+		str8_stream_print_str8(s, str8("0x"));
+		str8_stream_print_u64_hex(s, kind);
+	}
+}
+
+function void
+print_table_line_marker(Table *t, str8_stream *s)
+{
+	str8_stream_print_byte(s, '+');
+	for (s16 column = 0; column < t->columns; column++) {
+		for (sz i = 0; i < t->max_column_widths[column] + 2; i++)
+			str8_stream_print_byte(s, '-');
+		str8_stream_print_byte(s, '+');
+	}
+	str8_stream_print_byte(s, '\n');
+}
+
+function void
+print_table_row(Table *t, str8 *cells, str8_stream *s)
+{
+	str8_stream_print_byte(s, '|');
+	for (s16 column = 0; column < t->columns; column++) {
+		str8_stream_print_byte(s, ' ');
+		str8_stream_print_str8(s, cells[column]);
+		for (s32 i = cells[column].len; i < t->max_column_widths[column]; i++)
+			str8_stream_print_byte(s, ' ');
+		str8_stream_print_byte(s, ' ');
+		str8_stream_print_byte(s, '|');
+	}
+	str8_stream_print_byte(s, '\n');
+}
+
 function b32
 is_elf(str8 file)
 {
 	b32 result = file.len >= 16;
-	result &= file.data[0] == 0x7F;
-	result &= file.data[1] == 'E';
-	result &= file.data[2] == 'L';
-	result &= file.data[3] == 'F';
+	if (result) {
+		result &= file.data[0] == 0x7F;
+		result &= file.data[1] == 'E';
+		result &= file.data[2] == 'L';
+		result &= file.data[3] == 'F';
+	}
 	return result;
 }
 
@@ -851,7 +987,7 @@ elf_header_from_file(ELFHeader *eh, str8 file)
 		eh->abi         = file.data[7];
 		eh->abi_version = file.data[8];
 
-		str8_reader reader = str8_reader_from_str8(str8_chop_at(file, 16));
+		str8_stream reader = str8_reader_from_str8(str8_chop_at(file, 16));
 		b32 big_endian     = eh->endianness == EEK_BIG;
 		eh->kind                            = str8_read_u16(&reader, big_endian);
 		eh->machine                         = str8_read_u16(&reader, big_endian);
@@ -931,9 +1067,9 @@ elf_extract_section_headers(Arena *a, str8 file, ELFHeader *eh)
 	assert(file.len >= eh->section_header_offset + eh->section_header_entry_size * eh->section_header_count);
 
 	u32 sections = eh->section_header_count;
-	ELFSectionHeader *result = alloc(a, ELFSectionHeader, sections);
+	ELFSectionHeader *result = push_array(a, ELFSectionHeader, sections);
 	for (u32 i = 0; i < sections; i++) {
-		iz offset = eh->section_header_offset + eh->section_header_entry_size * i;
+		sz offset = eh->section_header_offset + eh->section_header_entry_size * i;
 		elf_section_header_from_str8(result + i, str8_chop_at(file, offset),
 		                             eh->endianness == EEK_BIG, eh->format == EF_32);
 	}
@@ -961,7 +1097,7 @@ elf_lookup_section(str8 name, str8 file, ELFSectionHeader *shs, u32 sections_cou
 }
 
 function void
-dwarf_read_unit_header(str8_reader *store, DWARFUnitHeader *duh)
+dwarf_read_unit_header(str8_stream *store, DWARFUnitHeader *duh)
 {
 	/* TODO(rnp): context containing endianess, dwarf size */
 	u32 test_length = str8_read_u32(store, 0);
@@ -975,11 +1111,11 @@ dwarf_read_unit_header(str8_reader *store, DWARFUnitHeader *duh)
 	else               duh->abbreviation_offset = str8_read_u32(store, 0);
 }
 
-function iz
+function sz
 dwarf_parse_abbrevation(Arena *a, DWARFAbbreviation *abbrv, str8 table)
 {
-	str8_reader table_reader = str8_reader_from_str8(table);
-	iz table_start_size = table.len;
+	str8_stream table_reader = str8_reader_from_str8(table);
+	sz table_start_size = table.len;
 	abbrv->abbreviation_code = str8_read_uleb128(&table_reader);
 	abbrv->kind              = str8_read_uleb128(&table_reader);
 	if (table_reader.count - table_reader.index < 1)
@@ -1011,27 +1147,78 @@ dwarf_lookup_abbreviation(Arena *a, str8 table, u64 key)
 	return result;
 }
 
-function Options
-parse_command_line(Arena *arena, s32 argc, char *argv[])
+function Table
+table_new(Arena *arena, u16 column_count, u16 reserved_rows)
 {
-	Options result = {0};
-
-	#define shift(c, v) ((c)--, *(v)++)
-
-	char *c_arg  = shift(argc, argv);
-	result.argv0 = (u8 *)c_arg;
-	while (argc) {
-		c_arg = shift(argc, argv);
-		*da_push(arena, &result.file_names) = (u8 *)c_arg;
-	}
-
-	#undef shift
-
+	Table result = {0};
+	result.max_column_widths = push_array(arena, typeof(*result.max_column_widths), column_count);
+	result.columns           = column_count;
+	assert(reserved_rows < 0xFFFF / column_count);
+	result.data = da_reserve(arena, &result, reserved_rows * column_count);
 	return result;
 }
 
+#define table_push_row(t, a, ...) \
+	table_push_row_(t, a, (str8 []){__VA_ARGS__}, sizeof((str8 []){__VA_ARGS__}) / (sizeof(str8)))
+function void
+table_push_row_(Table *table, Arena *arena, str8 *cells, sz cells_count)
+{
+	assert(table->columns == cells_count);
+	for (sz i = 0; i < cells_count; i++) {
+		table->max_column_widths[i] = MAX(table->max_column_widths[i], cells[i].len);
+		str8 *out  = da_push(arena, table);
+		str8  cell = cells[i];
+		*out = cell;
+	}
+}
+
+function void
+print_section_table(Arena arena, ELFSectionHeader *sections, u32 section_count)
+{
+	str8 header_row[] = {str8("name"), str8("kind"), str8("size"), str8("offset"), str8("flags"), str8("align")};
+	Table table = table_new(&arena, countof(header_row), section_count);
+	for (u32 i = 0; i < countof(header_row); i++)
+		table.max_column_widths[i] = header_row[i].len;
+
+	for (u32 i = 0; i < section_count; i++) {
+		if (sections[i].size) {
+			str8_stream sb = str8_stream_from_arena(arena);
+			str8 name = sections[i].name;
+
+			str8_stream_print_elf_section_header_kind(&sb, sections[i].kind);
+			str8 kind = arena_commit_str8_stream(&arena, &sb);
+
+			str8_stream_print_u64(&sb, sections[i].size);
+			str8 size = arena_commit_str8_stream(&arena, &sb);
+
+			str8_stream_print_str8(&sb, str8("0x"));
+			str8_stream_print_u64_hex(&sb, sections[i].offset);
+			str8 offset = arena_commit_str8_stream(&arena, &sb);
+
+			str8_stream_print_str8(&sb, str8("0x"));
+			str8_stream_print_u64_hex(&sb, sections[i].flags);
+			str8 flags = arena_commit_str8_stream(&arena, &sb);
+
+			str8_stream_print_u64(&sb, sections[i].addralign);
+			str8 align = arena_commit_str8_stream(&arena, &sb);
+
+			table_push_row(&table, &arena, name, kind, size, offset, flags, align);
+		}
+	}
+
+	str8_stream sb = str8_stream_from_arena(arena);
+	print_table_line_marker(&table, &sb);
+	print_table_row(&table, header_row, &sb);
+	print_table_line_marker(&table, &sb);
+	for (s16 index = 0; index < table.count; index += table.columns)
+		print_table_row(&table, table.data + index, &sb);
+	print_table_line_marker(&table, &sb);
+	fwrite(sb.data, 1, sb.index, stdout);
+	fflush(stdout);
+}
+
 function b32
-elf_inspect_file(Arena arena, str8 file)
+elf_inspect_file(Arena arena, str8 file, Options *options)
 {
 	b32 result = is_elf(file);
 	if (result) {
@@ -1039,16 +1226,16 @@ elf_inspect_file(Arena arena, str8 file)
 		if (!elf_header_from_file(&header, file)) {
 			return 1;
 		}
-		ELFSectionHeader *sections = elf_extract_section_headers(&arena, file, &header);
-		print_elf_header(&header);
-		printf("\nSections:\n");
-		for (u32 i = 0; i < header.section_header_count; i++) {
-			printf("[%2u]:", i);
-			str8 name = sections[i].name;
-			if (name.len) printf(" %.*s", (s32)name.len, name.data);
-			printf("\n");
-		}
 
+		if (options->header)
+			print_elf_header(&header);
+
+		ELFSectionHeader *sections = elf_extract_section_headers(&arena, file, &header);
+
+		if (options->sections)
+			print_section_table(arena, sections, header.section_header_count);
+
+		#if 0 /* TODO(rnp): fix this. it broke when da_reserve was fixed (i.e. it was always busted)*/
 		ELFSection debug_info  = elf_lookup_section(str8(".debug_info"), file,
 		                                            sections, header.section_header_count);
 		ELFSection debug_abbrv = elf_lookup_section(str8(".debug_abbrev"), file,
@@ -1064,7 +1251,7 @@ elf_inspect_file(Arena arena, str8 file)
 			return 0;
 		}
 
-		str8_reader d_info_reader = str8_reader_from_str8(debug_info.store);
+		str8_stream d_info_reader = str8_reader_from_str8(debug_info.store);
 		DWARFUnitHeader d_info_header = {0};
 		dwarf_read_unit_header(&d_info_reader, &d_info_header);
 		str8 abbreviation_table = str8_chop_at(debug_abbrv.store, d_info_header.abbreviation_offset);
@@ -1083,6 +1270,7 @@ elf_inspect_file(Arena arena, str8 file)
 			case DATK_ADDR_BASE:     printf("addr base:       "); break;
 			case DATK_LOCLISTS_BASE: printf("loc list base:   "); break;
 			case DATK_RNGLISTS_BASE: printf("range list base: "); break;
+			case DATK_NAME:          printf("name:            "); break;
 			default: assert(0); break;
 			}
 
@@ -1108,6 +1296,7 @@ elf_inspect_file(Arena arena, str8 file)
 			}
 			printf("\n");
 		}
+		#endif
 
 		result = 1;
 	}
@@ -1115,6 +1304,31 @@ elf_inspect_file(Arena arena, str8 file)
 	return result;
 }
 
+function Options
+parse_command_line(Arena *arena, s32 argc, char *argv[])
+{
+	Options result = {0};
+
+	#define shift(c, v) ((c)--, *(v)++)
+
+	char *c_arg  = shift(argc, argv);
+	result.argv0 = (u8 *)c_arg;
+	while (argc) {
+		c_arg = shift(argc, argv);
+		str8 arg = str8_from_c_str((u8 *)c_arg);
+		if (str8_equal(arg, str8("--sections"))) {
+			result.sections = 1;
+		} else if (str8_equal(arg, str8("--header"))) {
+			result.header = 1;
+		} else {
+			*da_push(arena, &result.file_names) = (u8 *)c_arg;
+		}
+	}
+
+	#undef shift
+
+	return result;
+}
 
 function b32
 elfinspect(Arena arena, s32 argc, char *argv[])
@@ -1125,8 +1339,8 @@ elfinspect(Arena arena, s32 argc, char *argv[])
 	for (s32 file_index = 0; file_index < options.file_names.count; file_index++) {
 		u8 *file_name = options.file_names.data[file_index];
 		str8 file     = os_map_file(file_name);
-		printf("-----<%s>-----\n", file_name);
-		result &= elf_inspect_file(arena, file);
+		if (!file.len) fprintf(stderr, "failed to open file: %s\n", file_name);
+		result &= elf_inspect_file(arena, file, &options);
 	}
 
 	return result;

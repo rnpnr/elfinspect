@@ -11,7 +11,7 @@ typedef int8_t     s8;
 typedef int16_t   s16;
 typedef int32_t   s32;
 typedef int64_t   s64;
-typedef ptrdiff_t  iz;
+typedef ptrdiff_t  sz;
 
 #include <stdio.h>
 
@@ -23,10 +23,10 @@ typedef ptrdiff_t  iz;
 #include <unistd.h>
 
 function Arena
-os_arena_new(iz size)
+os_arena_new(sz size)
 {
 	Arena result = {0};
-	iz page_size = sysconf(_SC_PAGESIZE);
+	sz page_size = sysconf(_SC_PAGESIZE);
 	if (size % page_size) size += page_size - (size % page_size);
 	u8 *mem = mmap(0, size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
 	if (mem != MAP_FAILED) {
