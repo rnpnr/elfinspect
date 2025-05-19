@@ -1,11 +1,15 @@
 /* See LICENSE for license details. */
+
+/* TODO(rnp):
+ * [ ]: remove all the unaligned reads so that this compiles with optimizations on
+ */
 #define local_persist static
 #define global        static
 #define function      static
 
 /* TODO(rnp) platform specific */
-#define ASSERT(c) do { if (!(c)) asm("int3; nop"); } while (0)
-#define TODO(c) ASSERT(c)
+#define assert(c) do { if (!(c)) asm("int3; nop"); } while (0)
+#define TODO(c) assert(c)
 
 #define countof(a) (sizeof(a) / sizeof(*a))
 
@@ -124,34 +128,28 @@ typedef enum {
 } ELFSectionKind;
 static_assert(sizeof(ELFSectionKind) == 4, "sizeof(ELFSectionKind) must be 4 bytes");
 
-/* X(ctype, name) */
-#define ELF_SECTION_HEADER_MEMBERS(ptrsize) \
-	X(u32,            name_table_offset) \
-	X(ELFSectionKind, kind)              \
-	X(ptrsize,        flags)             \
-	X(ptrsize,        addr)              \
-	X(ptrsize,        offset)            \
-	X(ptrsize,        size)              \
-	X(u32,            link)              \
-	X(u32,            info)              \
-	X(ptrsize,        addralign)         \
-	X(ptrsize,        entsize)
+/* X(ctype, read32, read64, name) */
+#define ELF_SECTION_HEADER_MEMBERS \
+	X(u32,            u32, u32, name_table_offset) \
+	X(ELFSectionKind, u32, u32, kind)              \
+	X(u64,            u32, u64, flags)             \
+	X(u64,            u32, u64, addr)              \
+	X(u64,            u32, u64, offset)            \
+	X(u64,            u32, u64, size)              \
+	X(u32,            u32, u32, link)              \
+	X(u32,            u32, u32, info)              \
+	X(u64,            u32, u64, addralign)         \
+	X(u64,            u32, u64, entsize)
 
-#define X(ctype, name) ctype name;
-typedef struct {ELF_SECTION_HEADER_MEMBERS(u32)} ELFSectionHeader32;
-typedef struct {ELF_SECTION_HEADER_MEMBERS(u64)} ELFSectionHeader64;
+#define X(ctype, r32, r64, name) ctype name;
+typedef struct {
+	str8 name;
+	ELF_SECTION_HEADER_MEMBERS
+} ELFSectionHeader;
 #undef X
 
 typedef struct {
-	str8 name;
-	union {
-		ELFSectionHeader64 sh64;
-		ELFSectionHeader32 sh32;
-	};
-} ELFSectionHeader;
-
-typedef struct {
-	ELFSectionHeader *header;
+	ELFSectionHeader header;
 	str8 store;
 } ELFSection;
 
@@ -604,9 +602,9 @@ function void *
 alloc_(Arena *a, iz alignment, iz size, iz count)
 {
 	iz capacity = a->end - a->beg;
-	iz padding  = -(uintptr_t)a->beg & alignment;
+	iz padding  = -(uintptr_t)a->beg & (alignment - 1);
 	if ((capacity - padding) / size  < count) {
-		ASSERT(0 && "OOM: buy more ram lol");
+		assert(0 && "OOM: buy more ram lol");
 	}
 	u8 *result = a->beg + padding;
 	a->beg += padding + size * count;
@@ -862,22 +860,70 @@ elf_header_from_file(ELFHeader *eh, str8 file)
 	return result;
 }
 
+function void
+elf_section_header32_from_str8(ELFSectionHeader *sh, str8 s, b32 big_endian)
+{
+	assert(s.len >= 0x28);
+	u8 *data = s.data;
+	if (big_endian) {
+		#define X(ctype, r32, r64, name) \
+			sh->name = r32 ##_host_from_be(data); data += sizeof(r32);
+		ELF_SECTION_HEADER_MEMBERS
+		#undef X
+	} else {
+		#define X(ctype, r32, r64, name) \
+			sh->name = r32 ##_host_from_le(data); data += sizeof(r32);
+		ELF_SECTION_HEADER_MEMBERS
+		#undef X
+	}
+}
+
+function void
+elf_section_header64_from_str8(ELFSectionHeader *sh, str8 s, b32 big_endian)
+{
+	assert(s.len >= 0x40);
+	u8 *data = s.data;
+	if (big_endian) {
+		#define X(ctype, r32, r64, name) \
+			sh->name = r64 ##_host_from_be(data); data += sizeof(r64);
+		ELF_SECTION_HEADER_MEMBERS
+		#undef X
+	} else {
+		#define X(ctype, r32, r64, name) \
+			sh->name = r64 ##_host_from_le(data); data += sizeof(r64);
+		ELF_SECTION_HEADER_MEMBERS
+		#undef X
+	}
+}
+
+function b32
+elf_section_header_from_str8(ELFSectionHeader *sh, str8 s, b32 big_endian, b32 is32bit)
+{
+	b32 result = s.len >= 0x40 || (is32bit && s.len >= 0x28);
+	if (result) {
+		if (is32bit) elf_section_header32_from_str8(sh, s, big_endian);
+		else         elf_section_header64_from_str8(sh, s, big_endian);
+	}
+	return result;
+}
+
 function ELFSectionHeader *
 elf_extract_section_headers(Arena *a, str8 file, ELFHeader *eh)
 {
-	TODO(eh->format == EF_64);
-	TODO(eh->endianness == EEK_LITTLE);
-	TODO(file.len >= eh->section_header_offset + eh->section_header_entry_size * eh->section_header_count);
+	/* TODO(rnp): */
+	assert(file.len >= eh->section_header_offset + eh->section_header_entry_size * eh->section_header_count);
+
 	u32 sections = eh->section_header_count;
 	ELFSectionHeader *result = alloc(a, ELFSectionHeader, sections);
 	for (u32 i = 0; i < sections; i++) {
 		iz offset = eh->section_header_offset + eh->section_header_entry_size * i;
-		result[i].sh64 = *(ELFSectionHeader64 *)(file.data + offset);
+		elf_section_header_from_str8(result + i, str8_chop(file, offset),
+		                             eh->endianness == EEK_BIG, eh->format == EF_32);
 	}
 
-	u8 *str_tab = file.data + result[eh->section_header_name_table_index].sh64.offset;
+	u8 *str_tab = file.data + result[eh->section_header_name_table_index].offset;
 	for (u32 i = 0; i < sections; i++)
-		result[i].name = c_str_to_str8(str_tab + result[i].sh64.name_table_offset);
+		result[i].name = c_str_to_str8(str_tab + result[i].name_table_offset);
 
 	return result;
 }
@@ -888,9 +934,9 @@ elf_lookup_section(str8 name, str8 file, ELFSectionHeader *shs, u32 sections_cou
 	ELFSection result = {0};
 	for (u32 i = 0; i < sections_count; i++) {
 		if (str8_equal(shs[i].name, name)) {
-			result.header     = shs + i;
-			result.store.data = file.data + shs[i].sh64.offset;
-			result.store.len  = shs[i].sh64.size;
+			result.header     = shs[i];
+			result.store.data = file.data + shs[i].offset;
+			result.store.len  = shs[i].size;
 			break;
 		}
 	}
@@ -935,7 +981,7 @@ dwarf_parse_abbrevation(Arena *a, DWARFAbbreviation *abbrv, str8 table)
 		if (attr_kind) {
 			*da_push(a, abbrv) = (DWARFAttribute){attr_kind, form_kind};
 		} else {
-			ASSERT(form_kind == 0);
+			assert(form_kind == 0);
 			break;
 		}
 	}
@@ -1002,7 +1048,7 @@ elfinspect(Arena arena, str8 file)
 			case DATK_LANGUAGE:      printf("language:      "); break;
 			case DATK_ADDR_BASE:     printf("addr base:     "); break;
 			case DATK_LOCLISTS_BASE: printf("loc list base: "); break;
-			default: ASSERT(0); break;
+			default: assert(0); break;
 			}
 
 			switch (attr.form_kind) {
@@ -1022,7 +1068,7 @@ elfinspect(Arena arena, str8 file)
 				d_info_reader = str8_chop(d_info_reader, 4);
 				printf("%u", data);
 			} break;
-			default: ASSERT(0); break;
+			default: assert(0); break;
 			}
 			printf("\n");
 		}
