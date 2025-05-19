@@ -30,6 +30,16 @@ typedef struct {
 	b32  errors;
 } str8_reader;
 
+typedef struct {
+	u8 *argv0;
+
+	struct {
+		u8 **data;
+		s16  capacity;
+		s16  count;
+	} file_names;
+} Options;
+
 /* NOTE: platform api; defined here so that other platform symbols are not visible to this TU */
 function str8 os_map_file(u8 *);
 
@@ -1000,11 +1010,29 @@ dwarf_lookup_abbreviation(Arena *a, str8 table, u64 key)
 	return result;
 }
 
+function Options
+parse_command_line(Arena *arena, s32 argc, char *argv[])
+{
+	Options result = {0};
+
+	#define shift(c, v) ((c)--, *(v)++)
+
+	char *c_arg  = shift(argc, argv);
+	result.argv0 = (u8 *)c_arg;
+	while (argc) {
+		c_arg = shift(argc, argv);
+		*da_push(arena, &result.file_names) = (u8 *)c_arg;
+	}
+
+	#undef shift
+
+	return result;
+}
+
 function b32
-elfinspect(Arena arena, str8 file)
+elf_inspect_file(Arena arena, str8 file)
 {
 	b32 result = is_elf(file);
-
 	if (result) {
 		ELFHeader header = {0};
 		if (!elf_header_from_file(&header, file)) {
@@ -1074,6 +1102,23 @@ elfinspect(Arena arena, str8 file)
 		}
 
 		result = 1;
+	}
+
+	return result;
+}
+
+
+function b32
+elfinspect(Arena arena, s32 argc, char *argv[])
+{
+	Options options = parse_command_line(&arena, argc, argv);
+
+	b32 result = 1;
+	for (s32 file_index = 0; file_index < options.file_names.count; file_index++) {
+		u8 *file_name = options.file_names.data[file_index];
+		str8 file     = os_map_file(file_name);
+		printf("-----<%s>-----\n", file_name);
+		result &= elf_inspect_file(arena, file);
 	}
 
 	return result;

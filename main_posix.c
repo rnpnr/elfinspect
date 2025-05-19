@@ -51,11 +51,10 @@ os_map_file(u8 *name)
 	return result;
 }
 
-s32
+extern s32
 main(s32 argc, char *argv[])
 {
 	Arena arena = os_arena_new(MB(32));
-	str8 file   = os_map_file((u8 *)argv[0]);
-	elfinspect(arena, file);
+	elfinspect(arena, argc, argv);
 	return 0;
 }
